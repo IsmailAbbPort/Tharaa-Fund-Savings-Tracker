@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Savings/growth mark: a white coin with an upward trend arrow, on the green adaptive
+     background. Art sits inside the 108dp canvas' center safe zone so the icon mask never
+     crops it. The arrow is a single filled shape (no open stroke ends), so it has clean
+     corners instead of the rounded "dots" a stroked line's end caps would leave. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Coin -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,54 A26,26 0 1 0 80,54 A26,26 0 1 0 28,54 Z" />
+    <!-- Upward trend arrow (Material 'trending_up' glyph), scaled into the coin. -->
+    <group
+        android:scaleX="1.6"
+        android:scaleY="1.6"
+        android:translateX="34"
+        android:translateY="36">
+        <path
+            android:fillColor="#0E7C5A"
+            android:pathData="M16,6l2.29,2.29l-4.88,4.88l-4,-4L2,16.59L3.41,18l6,-6l4,4l6.3,-6.29L22,12V6z" />
+    </group>
+</vector>
