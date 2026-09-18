@@ -49,18 +49,41 @@ object SavingsRepository {
     fun suppressNextLock() { skipNextLock = true }
     fun consumeSkipLock(): Boolean { val s = skipNextLock; skipNextLock = false; return s }
 
+    /**
+     * Set when a stored file exists that we could not read. While it is true the app refuses to
+     * write, so the unreadable file stays put and a backup can still rescue it. Losing the ledger
+     * to a silent overwrite is far worse than refusing to run.
+     */
+    private val _loadFailed = MutableStateFlow(false)
+    val loadFailed: StateFlow<Boolean> = _loadFailed.asStateFlow()
+
+    /** True when the last write didn't reach disk (full disk, Keystore trouble). Shown in the UI. */
+    private val _writeFailed = MutableStateFlow(false)
+    val writeFailed: StateFlow<Boolean> = _writeFailed.asStateFlow()
+
     fun init(context: Context) {
         synchronized(lock) {
             appContext = context.applicationContext
             if (::file.isInitialized) return
             file = File(context.applicationContext.filesDir, "savings.enc")
-            val decrypted = SecureStore.readString(file)
-            if (decrypted != null) {
-                runCatching { json.decodeFromString<SavingsData>(decrypted) }
-                    .onSuccess { _data.value = migrateLegacy(it) }
-            } else {
-                persist(_data.value)
+            val decrypted = try {
+                SecureStore.readString(file)
+            } catch (e: SecureStore.Unreadable) {
+                _loadFailed.value = true
+                return
             }
+            if (decrypted == null) {
+                // Genuinely the first run: seed the file.
+                persist(_data.value)
+                return
+            }
+            val parsed = runCatching { json.decodeFromString<SavingsData>(decrypted) }.getOrNull()
+            if (parsed == null) {
+                // It decrypted but isn't the shape we expect. Same rule: don't write over it.
+                _loadFailed.value = true
+                return
+            }
+            _data.value = migrateLegacy(parsed)
         }
     }
 
@@ -265,14 +288,27 @@ object SavingsRepository {
 
     // ---- backup / restore -----------------------------------------------------
 
-    /** Full-fidelity JSON backup (everything, restorable). A backup carries data, not a screen. */
-    fun exportJson(): String = json.encodeToString(_data.value.copy(session = null))
+    /**
+     * JSON backup of the ledger. A backup carries data, not device settings: the screen the user
+     * was on, and the passcode, stay behind. The passcode especially - it is four digits, so
+     * shipping its hash in a blob that lands on Drive puts the PIN one offline sweep away.
+     */
+    fun exportJson(): String =
+        json.encodeToString(_data.value.copy(session = null, passcodeHash = null, passcodeSalt = null))
 
     /** Replace all data from a JSON backup. Returns false if the text isn't valid. */
     fun importJson(text: String): Boolean = synchronized(lock) {
         val parsed = runCatching { json.decodeFromString<SavingsData>(text) }.getOrNull() ?: return false
-        // Drop any session an older backup carried: never open on a draft from another device.
-        val next = parsed.copy(session = null)
+        val current = _data.value
+        val next = parsed.copy(
+            // Never open on a draft from another device.
+            session = null,
+            // The app lock belongs to this phone, not to the blob. Without this, restoring a
+            // backup (which no longer carries a passcode) would quietly switch the lock off.
+            passcodeHash = current.passcodeHash,
+            passcodeSalt = current.passcodeSalt,
+            biometricEnabled = current.biometricEnabled,
+        )
         _data.value = next
         persist(next)
         appContext?.let { ReminderScheduler.apply(it, next.reminderEnabled, next.reminderDayOfMonth) }
@@ -310,7 +346,10 @@ object SavingsRepository {
     }
 
     private fun persist(d: SavingsData, notifyObservers: Boolean = true) {
-        runCatching { SecureStore.writeString(file, json.encodeToString(d)) }
+        // Never write over a file we failed to read: it may still be recoverable.
+        if (_loadFailed.value) return
+        val written = runCatching { SecureStore.writeString(file, json.encodeToString(d)) }.isSuccess
+        _writeFailed.value = !written
         if (!notifyObservers) return
         // Keep the home-screen widget (if any) in sync with the latest numbers.
         runCatching { TharaaWidget.refresh(appContext) }

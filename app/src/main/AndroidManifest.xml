@@ -4,9 +4,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+        allowBackup is off deliberately. Everything we store is sealed with a non-exportable,
+        device-bound Keystore key, so a copy Android moved to a new phone could never be decrypted
+        there - and the app would find an unreadable file where its data should be. The app ships
+        its own portable backup (passphrase-encrypted export, and Drive), which does work across
+        devices.
+    -->
     <application
         android:name=".App"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

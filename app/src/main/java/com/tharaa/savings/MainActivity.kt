@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -112,12 +113,53 @@ private const val PIN_LENGTH = 4
 private fun Gate() {
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
     val unlocked by SavingsRepository.sessionUnlocked.collectAsStateWithLifecycle()
+    val loadFailed by SavingsRepository.loadFailed.collectAsStateWithLifecycle()
     val activity = LocalContext.current as? FragmentActivity
 
-    if (!data.hasPasscode || unlocked) {
+    if (loadFailed) {
+        UnreadableDataScreen()
+    } else if (!data.hasPasscode || unlocked) {
         AppRoot()
     } else {
         LockScreen(activity, data.biometricEnabled) { SavingsRepository.markUnlocked() }
+    }
+}
+
+/**
+ * Shown instead of the app when the savings file is present but won't decrypt, which normally means
+ * it was restored from another device. The app writes nothing in this state, so the file is left
+ * exactly as it is and a backup can still recover it.
+ */
+@Composable
+private fun UnreadableDataScreen() {
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            Icons.Default.ReportProblem,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(48.dp)
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Saved data can't be read", style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "The savings file on this device is encrypted with a key this app can no longer use. " +
+                "That usually means it arrived from another phone, where the key stays behind.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Nothing has been changed or deleted. Restore your encrypted backup to recover, or " +
+                "reinstall the app to start over.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -316,6 +358,7 @@ private fun HomeScreen(
     onOpenSettings: () -> Unit,
 ) {
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
+    val writeFailed by SavingsRepository.writeFailed.collectAsStateWithLifecycle()
     val now = System.currentTimeMillis()
     var showAddLabel by remember { mutableStateOf(false) }
 
@@ -341,6 +384,21 @@ private fun HomeScreen(
             }
             IconButton(onClick = onOpenSettings) {
                 Icon(Icons.Default.Settings, contentDescription = "Settings")
+            }
+        }
+
+        if (writeFailed) {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Text(
+                    "Couldn't save to this device. Recent changes are on screen only and will be " +
+                        "lost when the app closes. Check your free storage.",
+                    Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
             }
         }
 
@@ -885,7 +943,9 @@ private fun PasscodeSetupDialog(onDismiss: () -> Unit) {
 private fun RateDialog(currentBps: Int, onDismiss: () -> Unit, onConfirm: (Int, Long) -> Unit) {
     var pct by remember { mutableStateOf(formatPercent(currentBps)) }
     var dateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    val bps = pct.toDoubleOrNull()?.let { (it * 100).toInt() }
+    // Share the calculator's parser: a local (it * 100).toInt() truncated 19.99 to 19.98, because
+    // 19.99 * 100 is 1998.9999999999998 in binary floating point.
+    val bps = parsePercentToBps(pct)
 
     AlertDialog(
         onDismissRequest = onDismiss,

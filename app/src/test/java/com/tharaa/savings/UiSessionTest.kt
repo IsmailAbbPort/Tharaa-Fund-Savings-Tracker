@@ -70,6 +70,8 @@ class UiSessionTest {
 
     @Before fun resetRepository() {
         SavingsRepository.importJson("""{"txns":[]}""")
+        // The passcode is deliberately device-local, so an import won't clear it for us.
+        SavingsRepository.clearPasscode()
         SavingsRepository.lockSession()
     }
 
@@ -114,5 +116,23 @@ class UiSessionTest {
         val foreign = SavingsData(session = UiSession(UiSession.CALCULATOR, calculator = draft, savedAt = now))
         assertTrue(SavingsRepository.importJson(json.encodeToString(foreign)))
         assertNull(SavingsRepository.data.value.session)
+    }
+
+    @Test fun backupsCarryNoPasscode() {
+        // Four digits behind PBKDF2 is still four digits: a hash in a blob on Drive is the PIN.
+        SavingsRepository.setPasscode("1234")
+        val exported = json.decodeFromString<SavingsData>(SavingsRepository.exportJson())
+        assertNull(exported.passcodeHash)
+        assertNull(exported.passcodeSalt)
+    }
+
+    @Test fun restoringABackupLeavesThisDevicesAppLockAlone() {
+        SavingsRepository.setPasscode("1234")
+        val mine = SavingsRepository.data.value.passcodeHash
+
+        // A backup no longer carries a passcode, so restoring one must not switch the lock off.
+        assertTrue(SavingsRepository.importJson(json.encodeToString(SavingsData())))
+        assertEquals(mine, SavingsRepository.data.value.passcodeHash)
+        assertTrue(SavingsRepository.data.value.hasPasscode)
     }
 }

@@ -33,9 +33,12 @@ object Interest {
     fun rateBpsOnDay(day: Long, rateChanges: List<RateChange>): Int {
         if (rateChanges.isEmpty()) return SavingsData.DEFAULT_RATE_BPS
         val onOrBefore = rateChanges.filter { dayIndex(it.effectiveTimestamp) <= day }
-        val chosen = onOrBefore.maxByOrNull { dayIndex(it.effectiveTimestamp) }
+        // Tie-break on the full timestamp, not the day: two changes recorded on the same day (a
+        // rate typed, then corrected) must resolve to the later one, which is also the one the
+        // settings screen displays. Bucketing first made maxByOrNull keep the earlier entry.
+        val chosen = onOrBefore.maxByOrNull { it.effectiveTimestamp }
         // Before the earliest change, fall back to that earliest rate.
-            ?: rateChanges.minByOrNull { dayIndex(it.effectiveTimestamp) }
+            ?: rateChanges.minByOrNull { it.effectiveTimestamp }
         return chosen?.annualRateBps ?: SavingsData.DEFAULT_RATE_BPS
     }
 
@@ -104,8 +107,13 @@ object Interest {
     ): Long {
         if (toTs <= fromTs) return 0
         val grew = valueMinor(txns, rateChanges, toTs) - valueMinor(txns, rateChanges, fromTs)
+        // Select by whole day, exactly as valueMinor buckets. Comparing raw millis here counted a
+        // transaction made later on the same day as fromTs twice: once inside value(fromTs), once
+        // again here, which showed up as a stubbornly zero "earned this month".
+        val fromDay = dayIndex(fromTs)
+        val toDay = dayIndex(toTs)
         val contributedInWindow = txns
-            .filter { it.timestamp > fromTs && it.timestamp <= toTs }
+            .filter { dayIndex(it.timestamp) in (fromDay + 1)..toDay }
             .sumOf { if (it.type == TxnType.DEPOSIT) it.amountMinor else -it.amountMinor }
         return grew - contributedInWindow
     }

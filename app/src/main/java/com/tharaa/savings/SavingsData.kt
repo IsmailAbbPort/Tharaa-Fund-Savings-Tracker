@@ -117,8 +117,15 @@ data class SavingsData(
 ) {
     val hasPasscode: Boolean get() = passcodeHash != null && passcodeSalt != null
 
-    val currentRateBps: Int
-        get() = rateChanges.maxByOrNull { it.effectiveTimestamp }?.annualRateBps ?: DEFAULT_RATE_BPS
+    /**
+     * The rate actually accruing right now. A change the user dated in the future is scheduled,
+     * not current: it must not be what Settings shows, what the calculator defaults to, or what a
+     * goal ETA assumes, because [Interest] rightly keeps compounding at the old rate until it lands.
+     */
+    val currentRateBps: Int get() = rateBpsAt(System.currentTimeMillis())
+
+    fun rateBpsAt(nowTs: Long): Int =
+        Interest.rateBpsOnDay(Interest.dayIndex(nowTs), rateChanges)
 
     fun labelById(id: String): SavingsLabel? = labels.find { it.id == id }
 
