@@ -32,7 +32,16 @@ object SavingsRepository {
     val sessionUnlocked: StateFlow<Boolean> = _sessionUnlocked.asStateFlow()
 
     fun markUnlocked() { _sessionUnlocked.value = true }
-    fun lockSession() { _sessionUnlocked.value = false }
+
+    /**
+     * Also drops the pending session. Behind the lock screen nothing reports where the user is, so
+     * keeping it would let each background re-stamp a long-dead draft and push its expiry out
+     * forever. The copy already on disk keeps its original timestamp and ages out honestly.
+     */
+    fun lockSession() {
+        _sessionUnlocked.value = false
+        pendingSession = null
+    }
 
     // When we deliberately send the user to a system screen (e.g. a fingerprint prompt), we don't
     // want the onStop re-lock to bounce them to the passcode. This one-shot flag skips it.
@@ -256,15 +265,17 @@ object SavingsRepository {
 
     // ---- backup / restore -----------------------------------------------------
 
-    /** Full-fidelity JSON backup (everything, restorable). */
-    fun exportJson(): String = json.encodeToString(_data.value)
+    /** Full-fidelity JSON backup (everything, restorable). A backup carries data, not a screen. */
+    fun exportJson(): String = json.encodeToString(_data.value.copy(session = null))
 
     /** Replace all data from a JSON backup. Returns false if the text isn't valid. */
     fun importJson(text: String): Boolean = synchronized(lock) {
         val parsed = runCatching { json.decodeFromString<SavingsData>(text) }.getOrNull() ?: return false
-        _data.value = parsed
-        persist(parsed)
-        appContext?.let { ReminderScheduler.apply(it, parsed.reminderEnabled, parsed.reminderDayOfMonth) }
+        // Drop any session an older backup carried: never open on a draft from another device.
+        val next = parsed.copy(session = null)
+        _data.value = next
+        persist(next)
+        appContext?.let { ReminderScheduler.apply(it, next.reminderEnabled, next.reminderDayOfMonth) }
         true
     }
 

@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -62,5 +63,56 @@ class UiSessionTest {
     @Test fun filesWrittenBeforeSessionsExistedStillLoad() {
         val d = json.decodeFromString<SavingsData>("""{"txns":[]}""")
         assertNull(d.session)
+    }
+
+    // The tests below drive the repository singleton, so each starts from a blank ledger. Writes
+    // land nowhere: the encrypted file is never initialised off-device, and persist swallows that.
+
+    @Before fun resetRepository() {
+        SavingsRepository.importJson("""{"txns":[]}""")
+        SavingsRepository.lockSession()
+    }
+
+    @Test fun backgroundingBehindTheLockScreenDoesNotRefreshTheExpiry() {
+        SavingsRepository.noteSession(UiSession(UiSession.CALCULATOR, calculator = draft))
+        SavingsRepository.saveSession(now)
+        assertEquals(now, SavingsRepository.data.value.session?.savedAt)
+
+        // Re-locking on the way out; nothing reports a screen while the passcode is up.
+        SavingsRepository.lockSession()
+        SavingsRepository.saveSession(now + 25 * minute)
+        SavingsRepository.saveSession(now + 50 * minute)
+
+        // The draft still carries its original timestamp, so it has genuinely gone stale.
+        assertEquals(now, SavingsRepository.data.value.session?.savedAt)
+        assertNull(SavingsRepository.restorableSession(now + 50 * minute))
+    }
+
+    @Test fun unlockingAndMovingOnRefreshesTheExpiryAgain() {
+        SavingsRepository.noteSession(UiSession(UiSession.CALCULATOR, calculator = draft))
+        SavingsRepository.saveSession(now)
+        SavingsRepository.lockSession()
+
+        // Back in: the UI reports where it is, and that report is what gets stamped.
+        SavingsRepository.markUnlocked()
+        SavingsRepository.noteSession(UiSession(UiSession.HOME))
+        SavingsRepository.saveSession(now + 50 * minute)
+
+        assertEquals(now + 50 * minute, SavingsRepository.data.value.session?.savedAt)
+        assertEquals(UiSession.HOME, SavingsRepository.restorableSession(now + 51 * minute)?.screen)
+    }
+
+    @Test fun backupsCarryNoSession() {
+        SavingsRepository.noteSession(UiSession(UiSession.CALCULATOR, calculator = draft))
+        SavingsRepository.saveSession(now)
+
+        val exported = json.decodeFromString<SavingsData>(SavingsRepository.exportJson())
+        assertNull(exported.session)
+    }
+
+    @Test fun restoringABackupNeverOpensSomeoneElsesDraft() {
+        val foreign = SavingsData(session = UiSession(UiSession.CALCULATOR, calculator = draft, savedAt = now))
+        assertTrue(SavingsRepository.importJson(json.encodeToString(foreign)))
+        assertNull(SavingsRepository.data.value.session)
     }
 }
