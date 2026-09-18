@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Unit tests, lint and release build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+
+      # lintVitalRelease is what catches the errors that only appear in a release build.
+      - name: Lint
+        run: ./gradlew lintVitalRelease --stacktrace
+
+      # No keystore.properties on CI, so this produces an unsigned APK. That is fine: the point
+      # is that R8 and resource shrinking still succeed, which a debug build would not prove.
+      - name: Release build
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-*.html
+            backup-kit/build/reports/tests/
+          if-no-files-found: ignore

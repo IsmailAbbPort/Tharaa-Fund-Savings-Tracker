@@ -15,7 +15,7 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Signing material - never commit these
+# Signing material - never commit these. keystore.properties.example shows the shape.
 *.jks
 *.keystore
 keystore.properties
