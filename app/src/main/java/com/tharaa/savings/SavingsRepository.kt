@@ -231,6 +231,29 @@ object SavingsRepository {
         persist(next)
     }
 
+    // ---- last-open session ----------------------------------------------------
+
+    /** The screen/draft last reported by the UI. Reaches disk only via [saveSession]. */
+    @Volatile private var pendingSession: UiSession? = null
+
+    fun noteSession(session: UiSession) { pendingSession = session }
+
+    /**
+     * Writes where the user was, so reopening lands there. Called as the app leaves the foreground
+     * rather than on every keystroke, so a half-typed projection costs one file write, not hundreds.
+     */
+    fun saveSession(nowTs: Long = System.currentTimeMillis()) = synchronized(lock) {
+        val session = pendingSession ?: return@synchronized
+        val next = _data.value.copy(session = session.copy(savedAt = nowTs))
+        _data.value = next
+        // A UI position is worth neither a widget refresh nor a cloud upload.
+        persist(next, notifyObservers = false)
+    }
+
+    /** The stored session while it is still fresh; null once it has gone stale or never existed. */
+    fun restorableSession(nowTs: Long = System.currentTimeMillis(), d: SavingsData = _data.value): UiSession? =
+        d.session?.takeIf { it.isRestorableAt(nowTs) }
+
     // ---- backup / restore -----------------------------------------------------
 
     /** Full-fidelity JSON backup (everything, restorable). */
@@ -275,8 +298,9 @@ object SavingsRepository {
         appContext?.let { ReminderScheduler.apply(it, next.reminderEnabled, next.reminderDayOfMonth) }
     }
 
-    private fun persist(d: SavingsData) {
+    private fun persist(d: SavingsData, notifyObservers: Boolean = true) {
         runCatching { SecureStore.writeString(file, json.encodeToString(d)) }
+        if (!notifyObservers) return
         // Keep the home-screen widget (if any) in sync with the latest numbers.
         runCatching { TharaaWidget.refresh(appContext) }
         // If cloud auto-backup is on, schedule a debounced upload of the new state.

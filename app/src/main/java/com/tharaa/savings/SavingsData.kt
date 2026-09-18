@@ -57,6 +57,42 @@ data class ProjectionPreset(
     val yearlyIncreaseBps: Int = 0,
 )
 
+/** The calculator's raw text inputs, exactly as typed. */
+@Serializable
+data class CalculatorDraft(
+    val start: String = "",
+    val rate: String = "",
+    val deposit: String = "",
+    val withdrawal: String = "",
+    val yearlyIncrease: String = "",
+    val years: String = "",
+    val months: String = "",
+)
+
+/**
+ * Where the user was when the app last left the foreground, plus any calculator inputs they hadn't
+ * saved as a preset. Reopening restores it only while it is fresh ([RESTORE_WINDOW_MS]); after that
+ * the app starts on Home so a stale half-typed projection doesn't greet you days later.
+ */
+@Serializable
+data class UiSession(
+    val screen: String,
+    val labelId: String? = null,
+    val calculator: CalculatorDraft? = null,
+    val savedAt: Long = 0L,
+) {
+    /** False once the window has passed, and also for a future timestamp (clock moved backwards). */
+    fun isRestorableAt(nowTs: Long): Boolean = nowTs - savedAt in 0..RESTORE_WINDOW_MS
+
+    companion object {
+        const val RESTORE_WINDOW_MS = 30L * 60 * 1000
+
+        const val HOME = "home"
+        const val DETAIL = "detail"
+        const val CALCULATOR = "calculator"
+    }
+}
+
 /** Everything we persist, in one JSON file. */
 @Serializable
 data class SavingsData(
@@ -71,6 +107,7 @@ data class SavingsData(
     val biometricEnabled: Boolean = false,
     val reminderEnabled: Boolean = false,
     val reminderDayOfMonth: Int = 1,
+    val session: UiSession? = null,
     // Legacy fields from the two-label build, read only so older files can migrate (see
     // SavingsRepository.migrateLegacy). Not written going forward.
     val seriousName: String? = null,

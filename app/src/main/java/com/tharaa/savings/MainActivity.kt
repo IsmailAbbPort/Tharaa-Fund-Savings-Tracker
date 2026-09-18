@@ -92,6 +92,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // Remember the screen and any calculator inputs so reopening picks up where they left off.
+        SavingsRepository.saveSession()
         // Re-lock the moment the app leaves the screen, so reopening shows the passcode first.
         // Guarded so a rotation/config change (or a fingerprint prompt we opened) doesn't lock.
         if (!isChangingConfigurations && !SavingsRepository.consumeSkipLock()) {
@@ -243,9 +245,38 @@ private sealed interface Screen {
     data object Settings : Screen
 }
 
+/**
+ * Maps a stored session back onto a screen. Anything that no longer makes sense - a deleted label,
+ * a screen we don't restore - falls back to Home.
+ */
+private fun UiSession?.toScreen(): Screen {
+    val session = this ?: return Screen.Home
+    return when (session.screen) {
+        UiSession.CALCULATOR -> Screen.Calculator
+        UiSession.DETAIL -> session.labelId
+            ?.takeIf { SavingsRepository.data.value.labelById(it) != null }
+            ?.let { Screen.Detail(it) } ?: Screen.Home
+        else -> Screen.Home
+    }
+}
+
 @Composable
 private fun AppRoot() {
-    var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+    // A recent enough session reopens where the user left off; see SavingsRepository.saveSession.
+    val restored = remember { SavingsRepository.restorableSession() }
+    var screen by remember { mutableStateOf(restored.toScreen()) }
+    var restoredDraft by remember { mutableStateOf(restored?.calculator) }
+
+    // Keep the repository posted on where we are. The calculator reports itself, draft included,
+    // so leave it alone here.
+    LaunchedEffect(screen) {
+        when (val s = screen) {
+            Screen.Home, Screen.Settings -> SavingsRepository.noteSession(UiSession(UiSession.HOME))
+            is Screen.Detail -> SavingsRepository.noteSession(UiSession(UiSession.DETAIL, labelId = s.labelId))
+            Screen.Calculator -> Unit
+        }
+    }
+
     when (val s = screen) {
         Screen.Home -> HomeScreen(
             onOpenLabel = { screen = Screen.Detail(it) },
@@ -253,7 +284,11 @@ private fun AppRoot() {
             onOpenSettings = { screen = Screen.Settings },
         )
         is Screen.Detail -> LabelDetailScreen(s.labelId, onBack = { screen = Screen.Home })
-        Screen.Calculator -> CalculatorScreen(onBack = { screen = Screen.Home })
+        Screen.Calculator -> CalculatorScreen(
+            restored = restoredDraft,
+            // Leaving the calculator discards the draft: coming back later starts fresh.
+            onBack = { restoredDraft = null; screen = Screen.Home },
+        )
         Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Home })
     }
 }
@@ -1271,21 +1306,22 @@ private fun PassphraseDialog(
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun CalculatorScreen(onBack: () -> Unit) {
+private fun CalculatorScreen(restored: CalculatorDraft?, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
     val now = System.currentTimeMillis()
 
     val total = data.labels.sumOf { SavingsRepository.valueMinor(it.id, now, data) }
 
-    // Defaults are pulled from the live app; every field can be overridden.
-    var startText by remember { mutableStateOf(moneyRaw(total)) }
-    var rateText by remember { mutableStateOf(formatPercent(data.currentRateBps)) }
-    var depositText by remember { mutableStateOf("") }
-    var withdrawText by remember { mutableStateOf("") }
-    var increaseText by remember { mutableStateOf("") }
-    var yearsText by remember { mutableStateOf("10") }
-    var monthsInput by remember { mutableStateOf("0") }
+    // A [restored] draft is what the user was typing before they left the app. Failing that,
+    // defaults are pulled from the live app; every field can be overridden.
+    var startText by remember { mutableStateOf(restored?.start ?: moneyRaw(total)) }
+    var rateText by remember { mutableStateOf(restored?.rate ?: formatPercent(data.currentRateBps)) }
+    var depositText by remember { mutableStateOf(restored?.deposit ?: "") }
+    var withdrawText by remember { mutableStateOf(restored?.withdrawal ?: "") }
+    var increaseText by remember { mutableStateOf(restored?.yearlyIncrease ?: "") }
+    var yearsText by remember { mutableStateOf(restored?.years ?: "10") }
+    var monthsInput by remember { mutableStateOf(restored?.months ?: "0") }
     var showSavePreset by remember { mutableStateOf(false) }
 
     val startMinor = Money.parseToMinor(startText) ?: 0L
@@ -1296,6 +1332,15 @@ private fun CalculatorScreen(onBack: () -> Unit) {
     val years = yearsText.toIntOrNull() ?: 0
     val extraMonths = monthsInput.toIntOrNull() ?: 0
     val months = (years * 12 + extraMonths).coerceIn(1, 1200)
+
+    // Hand the raw text to the repository so backgrounding the app can persist it as typed.
+    val draft = CalculatorDraft(
+        start = startText, rate = rateText, deposit = depositText, withdrawal = withdrawText,
+        yearlyIncrease = increaseText, years = yearsText, months = monthsInput,
+    )
+    LaunchedEffect(draft) {
+        SavingsRepository.noteSession(UiSession(UiSession.CALCULATOR, calculator = draft))
+    }
 
     val result = Projection.project(startMinor, rateBps, depositMinor, withdrawMinor, months, increaseBps)
 
