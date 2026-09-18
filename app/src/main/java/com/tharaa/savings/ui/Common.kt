@@ -3,11 +3,32 @@
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import com.tharaa.savings.*
+import kotlinx.coroutines.delay
 import java.util.Date
+
+/**
+ * A wall clock that re-reads itself every minute while the screen is composed.
+ *
+ * Reading System.currentTimeMillis() straight into a composable looks equivalent but isn't: the
+ * only thing that recomposed these screens was the ledger changing, so a balance sat frozen at
+ * whatever it was worth at the last edit. Interest compounds at UTC midnight, so a screen left
+ * open across midnight went on showing yesterday's figure indefinitely.
+ */
+@Composable
+internal fun rememberNow(): Long {
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(60_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    return now
+}
 
 /** Generic single-field text dialog (used for new-label and rename). */
 @Composable
@@ -18,7 +39,7 @@ internal fun TextEntryDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var text by remember { mutableStateOf(initial) }
+    var text by rememberSaveable { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -53,7 +74,7 @@ private object PastOrPresentDates : SelectableDates {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun DateField(label: String, millis: Long, futureAllowed: Boolean, onPick: (Long) -> Unit) {
-    var show by remember { mutableStateOf(false) }
+    var show by rememberSaveable { mutableStateOf(false) }
     OutlinedButton(onClick = { show = true }, modifier = Modifier.fillMaxWidth()) {
         Text("$label: ${dateOnlyFmt.format(Date(millis))}")
     }

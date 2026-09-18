@@ -7,7 +7,6 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +21,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +32,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.backupkit.BackupCrypto
 import com.backupkit.BackupManager
@@ -48,8 +49,31 @@ internal fun SettingsScreen(onBack: () -> Unit) {
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? FragmentActivity
-    var showRate by remember { mutableStateOf(false) }
-    var showPasscodeSetup by remember { mutableStateOf(false) }
+    var showRate by rememberSaveable { mutableStateOf(false) }
+    var showPasscodeSetup by rememberSaveable { mutableStateOf(false) }
+
+    // Below Tiramisu the permission doesn't exist and notifications just work.
+    fun notificationsAllowed() = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+    var canPostNotifications by remember { mutableStateOf(notificationsAllowed()) }
+    // The user may have changed this in system settings while we were away.
+    LifecycleResumeEffect(Unit) {
+        canPostNotifications = notificationsAllowed()
+        onPauseOrDispose { }
+    }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        canPostNotifications = granted
+        // Only arm the reminder if it can actually be delivered.
+        if (granted) {
+            SavingsRepository.setReminder(true, SavingsRepository.data.value.reminderDayOfMonth)
+        } else {
+            Toast.makeText(context, "Reminder needs notification permission", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // ---- Cloud backup (Google Drive) state ----
     var cloudEmail by remember { mutableStateOf(BackupManager.signedInEmail(context)) }
@@ -57,7 +81,7 @@ internal fun SettingsScreen(onBack: () -> Unit) {
     var cloudAuto by remember { mutableStateOf(BackupManager.isAutoEnabled(context)) }
     var cloudLast by remember { mutableStateOf(BackupManager.lastBackup(context)) }
     var cloudBusy by remember { mutableStateOf(false) }
-    var showCloudPassphrase by remember { mutableStateOf(false) }
+    var showCloudPassphrase by rememberSaveable { mutableStateOf(false) }
     val signIn = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -70,10 +94,10 @@ internal fun SettingsScreen(onBack: () -> Unit) {
 
     // Encrypted backup/restore via the system file picker (works with Drive, Files, etc.). The
     // passphrase never leaves the device; only the encrypted blob is written out.
-    var exportPassphrase by remember { mutableStateOf<String?>(null) }
+    var exportPassphrase by rememberSaveable { mutableStateOf<String?>(null) }
     var importedBlob by remember { mutableStateOf<ByteArray?>(null) }
-    var showExportPassphrase by remember { mutableStateOf(false) }
-    var showImportPassphrase by remember { mutableStateOf(false) }
+    var showExportPassphrase by rememberSaveable { mutableStateOf(false) }
+    var showImportPassphrase by rememberSaveable { mutableStateOf(false) }
 
     val exportEnc = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -206,18 +230,26 @@ internal fun SettingsScreen(onBack: () -> Unit) {
             Switch(
                 checked = data.reminderEnabled,
                 onCheckedChange = { on ->
-                    if (on && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-                        PackageManager.PERMISSION_GRANTED
-                    ) {
-                        activity?.let {
-                            ActivityCompat.requestPermissions(
-                                it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001
-                            )
+                    when {
+                        !on -> SavingsRepository.setReminder(false, data.reminderDayOfMonth)
+                        // Ask first, and let the answer decide. Turning the reminder on without
+                        // the permission used to schedule an alarm whose notification the system
+                        // then dropped in silence, for the life of the install.
+                        !canPostNotifications -> {
+                            SavingsRepository.suppressNextLock()
+                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
+                        else -> SavingsRepository.setReminder(true, data.reminderDayOfMonth)
                     }
-                    SavingsRepository.setReminder(on, data.reminderDayOfMonth)
                 }
+            )
+        }
+        if (data.reminderEnabled && !canPostNotifications) {
+            Text(
+                "Notifications are blocked for Tharaa Fund, so this reminder can't appear. " +
+                    "Allow them in the phone's app settings.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
             )
         }
         if (data.reminderEnabled) {
@@ -468,8 +500,8 @@ private fun PasscodeSetupDialog(onDismiss: () -> Unit) {
 
 @Composable
 private fun RateDialog(currentBps: Int, onDismiss: () -> Unit, onConfirm: (Int, Long) -> Unit) {
-    var pct by remember { mutableStateOf(formatPercent(currentBps)) }
-    var dateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var pct by rememberSaveable { mutableStateOf(formatPercent(currentBps)) }
+    var dateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     // Share the calculator's parser: a local (it * 100).toInt() truncated 19.99 to 19.98, because
     // 19.99 * 100 is 1998.9999999999998 in binary floating point.
     val bps = parsePercentToBps(pct)

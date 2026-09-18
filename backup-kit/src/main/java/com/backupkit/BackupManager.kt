@@ -1,4 +1,4 @@
-package com.backupkit
+﻿package com.backupkit
 
 import android.content.Context
 import android.content.Intent
@@ -89,9 +89,9 @@ object BackupManager {
 
     // ---- blocking cores (called on a worker/executor thread) ----
     internal fun backupNowBlocking(context: Context): BackupResult {
-        if (!::source.isInitialized) return BackupResult.Error("Backup not set up")
-        val account = GoogleAccountAuth.lastAccount(context) ?: return BackupResult.Error("Not signed in")
-        val passphrase = KeyVault.getPassphrase(context) ?: return BackupResult.Error("No passphrase set")
+        if (!::source.isInitialized) return BackupResult.Error("Backup not set up", permanent = true)
+        val account = GoogleAccountAuth.lastAccount(context) ?: return BackupResult.Error("Not signed in", permanent = true)
+        val passphrase = KeyVault.getPassphrase(context) ?: return BackupResult.Error("No passphrase set", permanent = true)
         return try {
             val token = GoogleAccountAuth.fetchToken(context, account)
             val store = DriveBackupStore(token)
@@ -102,20 +102,30 @@ object BackupManager {
             prefs(context).edit().putLong(KEY_LAST, System.currentTimeMillis()).apply()
             BackupResult.Success
         } catch (e: Exception) {
-            BackupResult.Error(e.message ?: "Backup failed")
+            BackupResult.Error(e.message ?: "Backup failed", permanent = isPermanent(e))
         }
     }
 
+    /**
+     * An authorisation problem won't fix itself on a retry: the user has to sign in again or
+     * re-grant access. Everything else (no network, a 5xx from Drive) is worth another attempt.
+     */
+    private fun isPermanent(e: Exception): Boolean =
+        // UserRecoverableAuthException extends GoogleAuthException, so this covers both.
+        e is com.google.android.gms.auth.GoogleAuthException ||
+            // Wrong passphrase, tampering, or an unrecognised format: retrying changes nothing.
+            e is BackupException
+
     internal fun restoreLatestBlocking(context: Context): BackupResult {
-        if (!::source.isInitialized) return BackupResult.Error("Backup not set up")
-        val account = GoogleAccountAuth.lastAccount(context) ?: return BackupResult.Error("Not signed in")
-        val passphrase = KeyVault.getPassphrase(context) ?: return BackupResult.Error("No passphrase set")
+        if (!::source.isInitialized) return BackupResult.Error("Backup not set up", permanent = true)
+        val account = GoogleAccountAuth.lastAccount(context) ?: return BackupResult.Error("Not signed in", permanent = true)
+        val passphrase = KeyVault.getPassphrase(context) ?: return BackupResult.Error("No passphrase set", permanent = true)
         return try {
             val token = GoogleAccountAuth.fetchToken(context, account)
             val store = DriveBackupStore(token)
             val folder = store.ensureFolder(source.projectId, store.ensureFolder(ROOT_FOLDER))
             val latest = store.list(folder).firstOrNull()
-                ?: return BackupResult.Error("No backup found in Drive")
+                ?: return BackupResult.Error("No backup found in Drive", permanent = true)
             val plain = BackupCrypto.decrypt(store.download(latest.id), passphrase.toCharArray())
             source.restore(plain)
             BackupResult.Success

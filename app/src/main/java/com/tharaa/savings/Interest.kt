@@ -25,9 +25,17 @@ object Interest {
     /** Whole-day index for a timestamp (UTC midnight buckets). */
     fun dayIndex(timestamp: Long): Long = Math.floorDiv(timestamp, DAY_MS)
 
-    /** Net principal currently placed under a label: deposits minus withdrawals, in piastres. */
-    fun netPrincipalMinor(txns: List<Txn>): Long =
-        txns.sumOf { if (it.type == TxnType.DEPOSIT) it.amountMinor else -it.amountMinor }
+    /**
+     * Net principal placed under a label as of [nowTs]: deposits minus withdrawals, in piastres.
+     * Anything dated after [nowTs] is excluded, the same way [valueMinor] ignores it, so the two
+     * always describe the same moment.
+     */
+    fun netPrincipalMinor(txns: List<Txn>, nowTs: Long = Long.MAX_VALUE): Long {
+        val nowDay = dayIndex(nowTs)
+        return txns
+            .filter { dayIndex(it.timestamp) <= nowDay }
+            .sumOf { if (it.type == TxnType.DEPOSIT) it.amountMinor else -it.amountMinor }
+    }
 
     /** The rate (bps) in effect on [day], i.e. the latest change effective on or before it. */
     fun rateBpsOnDay(day: Long, rateChanges: List<RateChange>): Int {
@@ -85,6 +93,10 @@ object Interest {
                 balance = balance.multiply(dailyFactor.pow(elapsed, MC), MC)
             }
             balance = balance.add(BigDecimal(netByDay[day] ?: 0L))
+            // A label can't hold less than nothing, and a negative balance compounding *more*
+            // negative is meaningless. Day zero was already clamped; this makes every other day
+            // agree with it rather than only the first.
+            if (balance.signum() < 0) balance = BigDecimal.ZERO
             prevDay = day
         }
         return balance.setScale(0, RoundingMode.HALF_UP).toLong()
@@ -92,7 +104,7 @@ object Interest {
 
     /** Interest earned on a label so far: current value minus net principal, in piastres. */
     fun interestMinor(txns: List<Txn>, rateChanges: List<RateChange>, nowTs: Long): Long =
-        valueMinor(txns, rateChanges, nowTs) - netPrincipalMinor(txns)
+        valueMinor(txns, rateChanges, nowTs) - netPrincipalMinor(txns, nowTs)
 
     /**
      * Interest earned strictly between [fromTs] and [toTs]. The value grew by

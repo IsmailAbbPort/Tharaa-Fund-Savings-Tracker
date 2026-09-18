@@ -10,11 +10,15 @@ import android.content.Intent
  */
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        SavingsRepository.init(context)
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            SavingsRepository.init(context)
             ReminderScheduler.scheduleFromData(context)
             return
         }
+        // The receiver has to be exported for BOOT_COMPLETED, which means any app on the device can
+        // send it an explicit intent. Only our own alarm action gets to raise a notification.
+        if (intent.action != ReminderScheduler.ACTION_REMIND) return
+        SavingsRepository.init(context)
         Notifications.showDepositReminder(context)
         val d = SavingsRepository.data.value
         if (d.reminderEnabled) ReminderScheduler.schedule(context, d.reminderDayOfMonth)

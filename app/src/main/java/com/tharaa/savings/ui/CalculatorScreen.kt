@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,20 +45,20 @@ import com.tharaa.savings.*
 internal fun CalculatorScreen(restored: CalculatorDraft?, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
-    val now = System.currentTimeMillis()
+    val now = rememberNow()
 
     val total = data.labels.sumOf { SavingsRepository.valueMinor(it.id, now, data) }
 
     // A [restored] draft is what the user was typing before they left the app. Failing that,
     // defaults are pulled from the live app; every field can be overridden.
-    var startText by remember { mutableStateOf(restored?.start ?: moneyRaw(total)) }
-    var rateText by remember { mutableStateOf(restored?.rate ?: formatPercent(data.currentRateBps)) }
-    var depositText by remember { mutableStateOf(restored?.deposit ?: "") }
-    var withdrawText by remember { mutableStateOf(restored?.withdrawal ?: "") }
-    var increaseText by remember { mutableStateOf(restored?.yearlyIncrease ?: "") }
-    var yearsText by remember { mutableStateOf(restored?.years ?: "10") }
-    var monthsInput by remember { mutableStateOf(restored?.months ?: "0") }
-    var showSavePreset by remember { mutableStateOf(false) }
+    var startText by rememberSaveable { mutableStateOf(restored?.start ?: moneyRaw(total)) }
+    var rateText by rememberSaveable { mutableStateOf(restored?.rate ?: formatPercent(data.currentRateBps)) }
+    var depositText by rememberSaveable { mutableStateOf(restored?.deposit ?: "") }
+    var withdrawText by rememberSaveable { mutableStateOf(restored?.withdrawal ?: "") }
+    var increaseText by rememberSaveable { mutableStateOf(restored?.yearlyIncrease ?: "") }
+    var yearsText by rememberSaveable { mutableStateOf(restored?.years ?: "10") }
+    var monthsInput by rememberSaveable { mutableStateOf(restored?.months ?: "0") }
+    var showSavePreset by rememberSaveable { mutableStateOf(false) }
 
     val startMinor = Money.parseToMinor(startText) ?: 0L
     val rateBps = parsePercentToBps(rateText) ?: data.currentRateBps

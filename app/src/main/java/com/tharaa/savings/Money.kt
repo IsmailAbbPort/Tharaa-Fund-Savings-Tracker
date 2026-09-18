@@ -15,8 +15,13 @@ object Money {
         val cleaned = raw.replace(",", "").trim()
         if (cleaned.isEmpty()) return null
         return try {
-            BigDecimal(cleaned).movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
+            // toLongExact, not toLong: BigDecimal.toLong() truncates to the low 64 bits without
+            // complaining, so a twenty-digit entry used to come back as a plausible-looking - and
+            // sometimes negative - amount instead of being rejected.
+            BigDecimal(cleaned).movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()
         } catch (e: NumberFormatException) {
+            null
+        } catch (e: ArithmeticException) {
             null
         }
     }
@@ -24,7 +29,8 @@ object Money {
     /** 123450 -> "1,234.50". */
     fun formatMinor(minor: Long): String {
         val negative = minor < 0
-        val abs = kotlin.math.abs(minor)
+        // abs(Long.MIN_VALUE) is still negative; clamp so a corrupted value can't print garbage.
+        val abs = if (minor == Long.MIN_VALUE) Long.MAX_VALUE else kotlin.math.abs(minor)
         val pounds = abs / 100
         val piastres = abs % 100
         val grouped = "%,d".format(pounds)

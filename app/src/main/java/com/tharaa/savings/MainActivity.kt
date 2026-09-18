@@ -34,13 +34,25 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Close off any trip to a system screen. If it turned into leaving the app for a while,
+        // this locks after all.
+        SavingsRepository.endSystemExcursion()
+    }
+
     override fun onStop() {
         super.onStop()
         // Remember the screen and any calculator inputs so reopening picks up where they left off.
         SavingsRepository.saveSession()
         // Re-lock the moment the app leaves the screen, so reopening shows the passcode first.
-        // Guarded so a rotation/config change (or a fingerprint prompt we opened) doesn't lock.
-        if (!isChangingConfigurations && !SavingsRepository.consumeSkipLock()) {
+        // Guarded so a rotation/config change doesn't lock.
+        if (isChangingConfigurations) return
+        if (SavingsRepository.consumeSkipLock()) {
+            // A file picker or permission prompt we opened ourselves: stay unlocked, but start
+            // the clock, so a short hop doesn't turn into an open app left on a table.
+            SavingsRepository.beginSystemExcursion()
+        } else {
             SavingsRepository.lockSession()
         }
     }

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,8 +44,8 @@ internal fun HomeScreen(
 ) {
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
     val writeFailed by SavingsRepository.writeFailed.collectAsStateWithLifecycle()
-    val now = System.currentTimeMillis()
-    var showAddLabel by remember { mutableStateOf(false) }
+    val now = rememberNow()
+    var showAddLabel by rememberSaveable { mutableStateOf(false) }
 
     val total = data.labels.sumOf { SavingsRepository.valueMinor(it.id, now, data) }
 

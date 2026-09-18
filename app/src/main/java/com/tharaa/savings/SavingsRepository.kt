@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Single source of truth for the savings ledger. It is an `object` (singleton) so the whole UI
@@ -43,11 +45,29 @@ object SavingsRepository {
         pendingSession = null
     }
 
-    // When we deliberately send the user to a system screen (e.g. a fingerprint prompt), we don't
-    // want the onStop re-lock to bounce them to the passcode. This one-shot flag skips it.
+    // When we deliberately send the user to a system screen (a file picker, a permission prompt),
+    // we don't want the onStop re-lock to bounce them to the passcode on the way back.
     @Volatile private var skipNextLock = false
     fun suppressNextLock() { skipNextLock = true }
     fun consumeSkipLock(): Boolean { val s = skipNextLock; skipNextLock = false; return s }
+
+    /** How long a trip to a system screen may last before it stops counting as "still in the app". */
+    const val EXCURSION_GRACE_MS = 60_000L
+
+    @Volatile private var excursionStartedAt = 0L
+
+    fun beginSystemExcursion(nowTs: Long = System.currentTimeMillis()) { excursionStartedAt = nowTs }
+
+    /**
+     * Called when the app comes back to the foreground. Skipping the lock for a quick hop to the
+     * file picker is fine; skipping it because the user walked away from the picker and came back
+     * an hour later is not, and that used to leave the balances open to anyone holding the phone.
+     */
+    fun endSystemExcursion(nowTs: Long = System.currentTimeMillis()) {
+        val startedAt = excursionStartedAt
+        excursionStartedAt = 0L
+        if (startedAt != 0L && nowTs - startedAt > EXCURSION_GRACE_MS) lockSession()
+    }
 
     /**
      * Set when a stored file exists that we could not read. While it is true the app refuses to
@@ -91,7 +111,7 @@ object SavingsRepository {
      * Folds the old two-label build's custom names/goals into the new [SavingsData.labels] list, so
      * upgrading doesn't lose them. Only fires when the file still carries the seeded default labels.
      */
-    private fun migrateLegacy(d: SavingsData): SavingsData {
+    internal fun migrateLegacy(d: SavingsData): SavingsData {
         val hasLegacy = d.seriousName != null || d.funName != null ||
             d.seriousGoalMinor != 0L || d.funGoalMinor != 0L
         if (!hasLegacy) return d
@@ -168,8 +188,14 @@ object SavingsRepository {
         persist(next)
     }
 
+    /**
+     * Removes a scheduled rate. Refuses the earliest entry: it anchors every day before the next
+     * change, so deleting it would silently recompute the whole history at a later rate.
+     */
     fun deleteRateChange(id: String) = synchronized(lock) {
-        val remaining = _data.value.rateChanges.filterNot { it.id == id }
+        val all = _data.value.rateChanges
+        if (all.minByOrNull { it.effectiveTimestamp }?.id == id) return
+        val remaining = all.filterNot { it.id == id }
         // Never leave the schedule empty, or interest has no rate to use.
         if (remaining.isEmpty()) return
         val next = _data.value.copy(rateChanges = remaining)
@@ -279,7 +305,7 @@ object SavingsRepository {
         val next = _data.value.copy(session = session.copy(savedAt = nowTs))
         _data.value = next
         // A UI position is worth neither a widget refresh nor a cloud upload.
-        persist(next, notifyObservers = false)
+        persistBlocking(next, notifyObservers = false)
     }
 
     /** The stored session while it is still fresh; null once it has gone stale or never existed. */
@@ -298,7 +324,9 @@ object SavingsRepository {
 
     /** Replace all data from a JSON backup. Returns false if the text isn't valid. */
     fun importJson(text: String): Boolean = synchronized(lock) {
-        val parsed = runCatching { json.decodeFromString<SavingsData>(text) }.getOrNull() ?: return false
+        val decoded = runCatching { json.decodeFromString<SavingsData>(text) }.getOrNull() ?: return false
+        // A backup can be older than the file on disk, so it needs the same migration init does.
+        val parsed = migrateLegacy(decoded)
         val current = _data.value
         val next = parsed.copy(
             // Never open on a draft from another device.
@@ -345,9 +373,32 @@ object SavingsRepository {
         appContext?.let { ReminderScheduler.apply(it, next.reminderEnabled, next.reminderDayOfMonth) }
     }
 
+    /**
+     * One thread for every write, so encrypting the ledger never happens on the main thread and
+     * writes still land in the order they were made. The in-memory [data] flow is updated first
+     * and synchronously, so the UI never waits on the disk.
+     */
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "savings-io").apply { isDaemon = true }
+    }
+
     private fun persist(d: SavingsData, notifyObservers: Boolean = true) {
         // Never write over a file we failed to read: it may still be recoverable.
         if (_loadFailed.value) return
+        io.execute { writeNow(d, notifyObservers) }
+    }
+
+    /**
+     * Queues the write and waits for it. Used only from `onStop`: that is the moment the process
+     * is most likely to be killed, so deferring this particular write risks losing exactly the
+     * thing we were trying to save.
+     */
+    private fun persistBlocking(d: SavingsData, notifyObservers: Boolean = true) {
+        if (_loadFailed.value) return
+        runCatching { io.submit { writeNow(d, notifyObservers) }.get(2, TimeUnit.SECONDS) }
+    }
+
+    private fun writeNow(d: SavingsData, notifyObservers: Boolean) {
         val written = runCatching { SecureStore.writeString(file, json.encodeToString(d)) }.isSuccess
         _writeFailed.value = !written
         if (!notifyObservers) return

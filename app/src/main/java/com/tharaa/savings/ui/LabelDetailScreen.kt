@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,12 +38,12 @@ private enum class TxnDialogKind { NONE, DEPOSIT, WITHDRAW }
 internal fun LabelDetailScreen(labelId: String, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val data by SavingsRepository.data.collectAsStateWithLifecycle()
-    val now = System.currentTimeMillis()
-    var dialog by remember { mutableStateOf(TxnDialogKind.NONE) }
+    val now = rememberNow()
+    var dialog by rememberSaveable { mutableStateOf(TxnDialogKind.NONE) }
     var editing by remember { mutableStateOf<Txn?>(null) }
-    var showGoal by remember { mutableStateOf(false) }
-    var showRename by remember { mutableStateOf(false) }
-    var confirmDeleteLabel by remember { mutableStateOf(false) }
+    var showGoal by rememberSaveable { mutableStateOf(false) }
+    var showRename by rememberSaveable { mutableStateOf(false) }
+    var confirmDeleteLabel by rememberSaveable { mutableStateOf(false) }
 
     val label = data.labelById(labelId)
     // The label can vanish (deleted from elsewhere); fall back to Home.
@@ -62,77 +63,83 @@ internal fun LabelDetailScreen(labelId: String, onBack: () -> Unit) {
         .coerceAtLeast(0L)
     val goal = label.goalMinor
 
-    Column(
+    // One list for the whole page. The summary used to sit in a fixed Column above a scrolling
+    // list, so at large font or display sizes the cards ate the viewport and the transactions
+    // below them could not be reached at all. Rows stay lazy; everything above them rides along
+    // as a single leading item.
+    LazyColumn(
         Modifier.fillMaxSize().systemBarsPadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-            Text(label.name, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold)
-            IconButton(onClick = { showRename = true }) {
-                Icon(Icons.Default.Edit, contentDescription = "Rename label")
-            }
-            if (canDelete) {
-                IconButton(onClick = { confirmDeleteLabel = true }) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete label")
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Text(label.name, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { showRename = true }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Rename label")
+                    }
+                    if (canDelete) {
+                        IconButton(onClick = { confirmDeleteLabel = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete label")
+                        }
+                    }
+                }
+
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("Current value (EGP)", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            Money.formatMinor(value),
+                            fontSize = adaptiveMoneySize(value, 44f),
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(Modifier.fillMaxWidth()) {
+                            ResultStat("Deposited", principal, Modifier.weight(1f))
+                            ResultStat("Interest", interest, Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth()) {
+                            ResultStat("This month", monthInterest, Modifier.weight(1f))
+                            ResultStat("This year", yearInterest, Modifier.weight(1f))
+                        }
+                    }
+                }
+
+                GoalSection(labelId, value, goal, data, now, onEdit = { showGoal = true })
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { dialog = TxnDialogKind.DEPOSIT }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Deposit")
+                    }
+                    OutlinedButton(onClick = { dialog = TxnDialogKind.WITHDRAW }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Remove, null); Spacer(Modifier.width(4.dp)); Text("Withdraw")
+                    }
+                }
+
+                Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Deposits & withdrawals", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (txns.isEmpty()) "Nothing yet. Add your first deposit." else "Tap a row to edit it.",
+                        style = if (txns.isEmpty()) MaterialTheme.typography.bodyMedium
+                        else MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
 
-        Card(Modifier.fillMaxWidth()) {
-            Column(
-                Modifier.fillMaxWidth().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("Current value (EGP)", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    Money.formatMinor(value),
-                    fontSize = adaptiveMoneySize(value, 44f),
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth()) {
-                    ResultStat("Deposited", principal, Modifier.weight(1f))
-                    ResultStat("Interest", interest, Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth()) {
-                    ResultStat("This month", monthInterest, Modifier.weight(1f))
-                    ResultStat("This year", yearInterest, Modifier.weight(1f))
-                }
-            }
-        }
-
-        GoalSection(labelId, value, goal, data, now, onEdit = { showGoal = true })
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { dialog = TxnDialogKind.DEPOSIT }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Deposit")
-            }
-            OutlinedButton(onClick = { dialog = TxnDialogKind.WITHDRAW }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Remove, null); Spacer(Modifier.width(4.dp)); Text("Withdraw")
-            }
-        }
-
-        Text("Deposits & withdrawals", style = MaterialTheme.typography.titleMedium)
-        if (txns.isEmpty()) {
-            Text("Nothing yet. Add your first deposit.", style = MaterialTheme.typography.bodyMedium)
-        } else {
-            Text("Tap a row to edit it.", style = MaterialTheme.typography.bodySmall)
-            LazyColumn(
-                Modifier.fillMaxWidth().weight(1f, fill = false),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(txns.sortedByDescending { it.timestamp }, key = { it.id }) { t ->
-                    TxnRow(t, onEdit = { editing = t })
-                }
-            }
+        items(txns.sortedByDescending { it.timestamp }, key = { it.id }) { t ->
+            TxnRow(t, onEdit = { editing = t })
         }
     }
 
@@ -238,7 +245,7 @@ private fun TxnRow(t: Txn, onEdit: () -> Unit) {
     } else {
         "-" to MaterialTheme.colorScheme.error
     }
-    var confirmDelete by remember { mutableStateOf(false) }
+    var confirmDelete by rememberSaveable { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth().clickable(onClick = onEdit)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -289,9 +296,9 @@ private fun TxnDialog(
     onDismiss: () -> Unit,
     onConfirm: (Long, Long, String) -> Unit,
 ) {
-    var amount by remember { mutableStateOf(initial?.let { moneyRaw(it.amountMinor) } ?: "") }
-    var note by remember { mutableStateOf(initial?.note ?: "") }
-    var dateMillis by remember { mutableStateOf(initial?.timestamp ?: System.currentTimeMillis()) }
+    var amount by rememberSaveable { mutableStateOf(initial?.let { moneyRaw(it.amountMinor) } ?: "") }
+    var note by rememberSaveable { mutableStateOf(initial?.note ?: "") }
+    var dateMillis by rememberSaveable { mutableStateOf(initial?.timestamp ?: System.currentTimeMillis()) }
     val minor = Money.parseToMinor(amount)
     val verb = if (initial != null) "Edit" else if (type == TxnType.DEPOSIT) "Add" else "Record"
     val noun = if (type == TxnType.DEPOSIT) "deposit" else "withdrawal"
@@ -333,7 +340,7 @@ private fun TxnDialog(
 
 @Composable
 private fun GoalDialog(currentGoal: Long, onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
-    var amount by remember { mutableStateOf(if (currentGoal > 0) moneyRaw(currentGoal) else "") }
+    var amount by rememberSaveable { mutableStateOf(if (currentGoal > 0) moneyRaw(currentGoal) else "") }
     val minor = Money.parseToMinor(amount) ?: 0L
     AlertDialog(
         onDismissRequest = onDismiss,
