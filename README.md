@@ -1,5 +1,9 @@
 # Tharaa Fund
 
+[![CI](https://github.com/IsmailAbbPort/Tharaa-Fund-Savings-Tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/IsmailAbbPort/Tharaa-Fund-Savings-Tracker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen.svg)](#building)
+
 An offline-first Android app for tracking money held in a single Egyptian savings certificate, split into as many personal labels as you want. The bank reports one balance; this app keeps the buckets apart, compounds interest daily per label, and projects the balance forward.
 
 Built with Kotlin and Jetpack Compose. No backend of its own, no analytics, and no account unless you opt into Drive backup. The ledger lives in one AES-256-GCM encrypted file on the device.
@@ -78,7 +82,7 @@ interface BackupSource {
 
 ## Building
 
-Requires JDK 17 and the Android SDK (compileSdk 35).
+Runs on Android 8.0 (API 26) and up. Building needs JDK 17 and the Android SDK (compileSdk 35).
 
 ```bash
 git clone https://github.com/IsmailAbbPort/Tharaa-Fund-Savings-Tracker.git
@@ -88,7 +92,9 @@ cd Tharaa-Fund-Savings-Tracker
 
 Create a `local.properties` with `sdk.dir=/path/to/Android/Sdk`, or open the project in Android Studio and let it write one.
 
-`./gradlew assembleRelease` runs R8 and resource shrinking. It signs the APK only if you add a `keystore.properties` (see `keystore.properties.example`); without one it still builds, just unsigned and therefore not installable.
+Debug builds take a `.debug` application id, so they install alongside a release build rather than replacing it. Note that means a debug build cannot update a release install, or see its data.
+
+`./gradlew assembleRelease` runs R8 and resource shrinking, and produces a ~2.4 MB APK. It signs only if you add a `keystore.properties` (see `keystore.properties.example`); without one it still builds, just unsigned and therefore not installable.
 
 Google Drive backup additionally needs an OAuth client ID registered for your signing certificate; without one, every other feature still works.
 
@@ -103,6 +109,16 @@ JVM unit tests cover interest compounding across rate changes and its window bou
 Not covered yet, and worth knowing before you trust the suite: there is no `androidTest` source set, so nothing exercises the Compose layer or the Keystore path. `SecureStore` in particular is untested, because `AndroidKeyStore` exists neither on the JVM nor under Robolectric; testing it needs a seam between key acquisition and the file framing.
 
 CI runs the tests, `lintVitalRelease` and a release build on every push and pull request.
+
+## Known gaps
+
+Stated plainly, because they are the next things worth doing rather than things being hidden:
+
+- **No instrumentation tests.** The `Gate` composable is the app's security boundary and nothing asserts its behaviour. That is the highest-value test to add.
+- **`SecureStore` is untestable as written.** Key acquisition and file framing need separating before the atomic-write and fail-closed paths can be covered.
+- **Google Sign-In is deprecated** in favour of Credential Manager plus `AuthorizationClient`. It still works, but it is the retired API surface.
+- **Dependencies are pinned to late 2024**, including `androidx.biometric` 1.1.0, which is also the undeclared source of the `FragmentActivity` base class.
+- **A withdrawal larger than the balance is accepted.** The engine floors the value at zero rather than compounding a negative, but the dialog should refuse it outright.
 
 ## License
 
